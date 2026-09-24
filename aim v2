@@ -16,6 +16,8 @@ local FILE = FOLDER .. "/settings.json"
 if not isfolder(FOLDER) then makefolder(FOLDER) end
 if not isfolder(CONFIG_FOLDER) then makefolder(CONFIG_FOLDER) end
 
+local RANDOM_SUFFIX = tostring(math.random(10000, 99999))
+
 local isDestroyed = false
 local Notify = function() end
 
@@ -35,6 +37,21 @@ local Defaults = {
     AimLockSmoothness = 25,
     AimLockShowFOV = true,
     AimLockMode = "Hold",
+    TriggerBotEnabled = false,
+    TriggerBotKey = "None",
+    TriggerBotDelay = 50,
+    TriggerBotFOV = 10,
+    HitSoundsEnabled = false,
+    HitSoundsVolume = 50,
+    AntiFlingEnabled = false,
+    AutoParryEnabled = false,
+    FlyCollideEnabled = true,
+    AdaptiveSpeedEnabled = false,
+    AdaptiveSpeedRadius = 30,
+    WatermarkFPS = false,
+    WatermarkPing = false,
+    AntiAFKEnabled = false,
+    AutoLoadConfig = "",
 }
 
 local Settings = {}
@@ -163,17 +180,20 @@ local function Reg(el) table.insert(AllElements, el) end
 
 local CoreGui = (gethui and gethui()) or game:GetService("CoreGui")
 
-if CoreGui:FindFirstChild("NexusHubUI") then CoreGui.NexusHubUI:Destroy() end
-if CoreGui:FindFirstChild("NexusFOVGui") then CoreGui.NexusFOVGui:Destroy() end
+for _, ch in ipairs(CoreGui:GetChildren()) do
+    if ch.Name:match("^NexusHubUI") or ch.Name:match("^NexusFOVGui") or ch.Name:match("^NexusInfo") then
+        pcall(function() ch:Destroy() end)
+    end
+end
 
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "NexusHubUI"
+ScreenGui.Name = "NexusHubUI_" .. RANDOM_SUFFIX
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = CoreGui
 
 local FOVGui = Instance.new("ScreenGui")
-FOVGui.Name = "NexusFOVGui"
+FOVGui.Name = "NexusFOVGui_" .. RANDOM_SUFFIX
 FOVGui.ResetOnSpawn = false
 FOVGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 FOVGui.IgnoreGuiInset = true
@@ -353,9 +373,10 @@ local function ShowMain()
     menuVisible = true
     MainFrame.Visible = true
     MainFrame.Size = UDim2.new(0, 0, 0, 0)
+    local savedPos = MainFrame.Position
     MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
     TweenService:Create(MainFrame, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Size = UDim2.new(0, 600, 0, 400), Position = UDim2.new(0.5, -300, 0.5, -200)
+        Size = UDim2.new(0, 600, 0, 400), Position = UDim2.new(savedPos.X.Scale, savedPos.X.Offset, savedPos.Y.Scale, savedPos.Y.Offset)
     }):Play()
 end
 
@@ -952,7 +973,6 @@ local function UpdateAccentColor(newName)
     for name, data in pairs(TabButtons) do
         if name == ActiveTab then data.Label.TextColor3 = nc end
         if data.Indicator then data.Indicator.BackgroundColor3 = nc end
-        if data.IndicatorGlow then data.IndicatorGlow.BackgroundColor3 = nc end
     end
     for _, el in ipairs(AllElements) do
         if el.obj and el.obj.Parent then
@@ -1384,6 +1404,15 @@ end))
 
 local flyConn, flyLV, flyAttachment, noclipConn
 
+local function IsWallAhead(hrp, direction)
+    if not Settings.FlyCollideEnabled then return false end
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    rp.FilterDescendantsInstances = {LP.Character}
+    local res = workspace:Raycast(hrp.Position, direction * 3, rp)
+    return res ~= nil
+end
+
 local function StartFly()
     if flyConn then return end
     local char = LP.Character
@@ -1411,6 +1440,14 @@ local function StartFly()
         if UIS:IsKeyDown(Enum.KeyCode.D) then m = m + cf.RightVector end
         if UIS:IsKeyDown(Enum.KeyCode.Space) then m = m + Vector3.new(0, 1, 0) end
         if UIS:IsKeyDown(Enum.KeyCode.LeftControl) then m = m - Vector3.new(0, 1, 0) end
+
+        if Settings.FlyCollideEnabled and m.Magnitude > 0 then
+            local lookDir = m.Unit
+            if IsWallAhead(hrp, lookDir) then
+                m = m * 0.1
+            end
+        end
+
         flyLV.VectorVelocity = m * Settings.FlySpeed
     end)
 end
@@ -1440,6 +1477,361 @@ end
 
 local function StopNoclip()
     if noclipConn then noclipConn:Disconnect(); noclipConn = nil end
+end
+
+-- === TRIGGER BOT ===
+local triggerConn = nil
+local triggerLastShot = 0
+
+local function StartTriggerBot()
+    if triggerConn then return end
+    triggerConn = RunService.RenderStepped:Connect(function()
+        if not Settings.TriggerBotEnabled or isDestroyed then return end
+        if not LP.Character then return end
+
+        local keyEnum = GetKeyEnum(Settings.TriggerBotKey)
+        if keyEnum and Settings.TriggerBotKey ~= "None" then
+            local held = false
+            if typeof(keyEnum) == "EnumItem" and keyEnum.EnumType == Enum.KeyCode then
+                held = UIS:IsKeyDown(keyEnum)
+            elseif typeof(keyEnum) == "EnumItem" and keyEnum.EnumType == Enum.UserInputType then
+                held = UIS:IsMouseButtonPressed(keyEnum)
+            end
+            if not held then return end
+        end
+
+        local now = tick()
+        if now - triggerLastShot < (Settings.TriggerBotDelay / 1000) then return end
+
+        local cam = Camera
+        local center = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LP and plr.Character and not IsIgnored(plr) then
+                local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+                local part = plr.Character:FindFirstChild(Settings.AimbotHitbox)
+                if hum and hum.Health > 0 and part then
+                    local sp, on = cam:WorldToViewportPoint(part.Position)
+                    if on then
+                        local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                        if d <= Settings.TriggerBotFOV then
+                            pcall(function()
+                                if mouse1click then mouse1click() end
+                            end)
+                            triggerLastShot = now
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function StopTriggerBot()
+    if triggerConn then triggerConn:Disconnect(); triggerConn = nil end
+end
+
+-- === HIT SOUNDS ===
+local hitSoundConn = nil
+local hitSoundLast = {}
+
+local function PlayHitSound()
+    local s = Instance.new("Sound")
+    s.SoundId = "rbxassetid://9114661000"
+    s.Volume = Settings.HitSoundsVolume / 100
+    s.Parent = workspace
+    s:Play()
+    task.delay(2, function() pcall(function() s:Destroy() end) end)
+end
+
+local function StartHitSounds()
+    if hitSoundConn then return end
+    hitSoundConn = RunService.Heartbeat:Connect(function()
+        if not Settings.HitSoundsEnabled or isDestroyed then return end
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LP and plr.Character then
+                local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    local last = hitSoundLast[plr]
+                    if last == nil then
+                        hitSoundLast[plr] = hum.Health
+                    elseif hum.Health < last and hum.Health > 0 then
+                        PlayHitSound()
+                        hitSoundLast[plr] = hum.Health
+                    else
+                        hitSoundLast[plr] = hum.Health
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function StopHitSounds()
+    if hitSoundConn then hitSoundConn:Disconnect(); hitSoundConn = nil end
+    hitSoundLast = {}
+end
+
+-- === ANTI-FLING ===
+local antiFlingConn = nil
+
+local function StartAntiFling()
+    if antiFlingConn then return end
+    antiFlingConn = RunService.Heartbeat:Connect(function()
+        if not Settings.AntiFlingEnabled or isDestroyed then return end
+        local char = LP.Character
+        if not char then return end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp and hrp.AssemblyLinearVelocity.Magnitude > 100 then
+            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+        end
+    end)
+end
+
+local function StopAntiFling()
+    if antiFlingConn then antiFlingConn:Disconnect(); antiFlingConn = nil end
+end
+
+-- === AUTO PARRY ===
+local autoParryConn = nil
+
+local function StartAutoParry()
+    if autoParryConn then return end
+    autoParryConn = RunService.Heartbeat:Connect(function()
+        if not Settings.AutoParryEnabled or isDestroyed then return end
+        local char = LP.Character
+        if not char then return end
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool and tool:FindFirstChild("Handle") then
+            local myRoot = char:FindFirstChild("HumanoidRootPart")
+            if not myRoot then return end
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= LP and plr.Character then
+                    local hisRoot = plr.Character:FindFirstChild("HumanoidRootPart")
+                    if hisRoot and (myRoot.Position - hisRoot.Position).Magnitude < 8 then
+                        pcall(function() tool:Activate() end)
+                        break
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function StopAutoParry()
+    if autoParryConn then autoParryConn:Disconnect(); autoParryConn = nil end
+end
+
+-- === ADAPTIVE SPEED ===
+local adaptiveLastSpeed = nil
+local adaptiveConn = nil
+
+local function StartAdaptiveSpeed()
+    if adaptiveConn then return end
+    adaptiveConn = RunService.Heartbeat:Connect(function()
+        if not Settings.AdaptiveSpeedEnabled or isDestroyed then return end
+        local h = GetHum()
+        if not h then return end
+        local char = LP.Character
+        if not char then return end
+        local myRoot = char:FindFirstChild("HumanoidRootPart")
+        if not myRoot then return end
+
+        local nearby = false
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LP and plr.Character then
+                local hisRoot = plr.Character:FindFirstChild("HumanoidRootPart")
+                if hisRoot and (myRoot.Position - hisRoot.Position).Magnitude < Settings.AdaptiveSpeedRadius then
+                    nearby = true
+                    break
+                end
+            end
+        end
+
+        if nearby then
+            if adaptiveLastSpeed == nil then adaptiveLastSpeed = h.WalkSpeed end
+            h.WalkSpeed = 16
+        else
+            if adaptiveLastSpeed ~= nil then
+                h.WalkSpeed = adaptiveLastSpeed
+                adaptiveLastSpeed = nil
+            end
+        end
+    end)
+end
+
+local function StopAdaptiveSpeed()
+    if adaptiveConn then adaptiveConn:Disconnect(); adaptiveConn = nil end
+    adaptiveLastSpeed = nil
+end
+
+-- === INFO WINDOW (FPS / Ping) ===
+local InfoGui = nil
+local InfoFrame = nil
+local InfoLabel = nil
+local InfoStroke = nil
+local infoConn = nil
+local infoDragConn1 = nil
+local infoDragConn2 = nil
+local infoDragConn3 = nil
+local fpsFrames = 0
+local fpsTime = tick()
+local currentFPS = 0
+
+local function BuildInfoText()
+    local parts = {}
+    if Settings.WatermarkFPS then
+        table.insert(parts, "FPS: " .. tostring(currentFPS))
+    end
+    if Settings.WatermarkPing then
+        local ping = "?"
+        pcall(function()
+            local p = LP:GetNetworkPing()
+            if p and p > 0 then
+                ping = tostring(math.floor(p * 1000))
+            end
+        end)
+        table.insert(parts, "Ping: " .. ping .. "ms")
+    end
+    if #parts == 0 then return nil end
+    return table.concat(parts, "  |  ")
+end
+
+local function StartWatermark()
+    if InfoGui then return end
+    InfoGui = Instance.new("ScreenGui")
+    InfoGui.Name = "NexusInfo_" .. RANDOM_SUFFIX
+    InfoGui.ResetOnSpawn = false
+    InfoGui.IgnoreGuiInset = true
+    InfoGui.Parent = CoreGui
+
+    InfoFrame = Instance.new("Frame")
+    InfoFrame.Size = UDim2.new(0, 0, 0, 24)
+    InfoFrame.Position = UDim2.new(0, 12, 0, 12)
+    InfoFrame.BackgroundColor3 = Color3.fromRGB(20, 16, 12)
+    InfoFrame.BackgroundTransparency = 0.35
+    InfoFrame.BorderSizePixel = 0
+    InfoFrame.Visible = false
+    InfoFrame.Active = true
+    InfoFrame.Parent = InfoGui
+    Instance.new("UICorner", InfoFrame).CornerRadius = UDim.new(0, 6)
+
+    InfoStroke = Instance.new("UIStroke", InfoFrame)
+    InfoStroke.Color = Colors.Accent
+    InfoStroke.Thickness = 1
+    InfoStroke.Transparency = 0.4
+
+    local pad = Instance.new("UIPadding", InfoFrame)
+    pad.PaddingLeft = UDim.new(0, 10)
+    pad.PaddingRight = UDim.new(0, 10)
+
+    InfoLabel = Instance.new("TextLabel")
+    InfoLabel.Size = UDim2.new(1, 0, 1, 0)
+    InfoLabel.BackgroundTransparency = 1
+    InfoLabel.Text = ""
+    InfoLabel.TextColor3 = Colors.Accent
+    InfoLabel.TextSize = 12
+    InfoLabel.Font = Enum.Font.GothamBold
+    InfoLabel.TextXAlignment = Enum.TextXAlignment.Left
+    InfoLabel.TextYAlignment = Enum.TextYAlignment.Center
+    InfoLabel.Parent = InfoFrame
+
+    InfoLabel:GetPropertyChangedSignal("TextBounds"):Connect(function()
+        if InfoFrame then
+            InfoFrame.Size = UDim2.new(0, InfoLabel.TextBounds.X + 24, 0, 24)
+        end
+    end)
+
+    local draggingInfo = false
+    local infoDragStart = nil
+    local infoStartPos = nil
+
+    infoDragConn1 = InfoFrame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            draggingInfo = true
+            infoDragStart = input.Position
+            infoStartPos = InfoFrame.Position
+        end
+    end)
+
+    infoDragConn2 = UIS.InputChanged:Connect(function(input)
+        if draggingInfo and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - infoDragStart
+            local newX = infoStartPos.X.Offset + delta.X
+            local newY = infoStartPos.Y.Offset + delta.Y
+
+            local vp = Camera.ViewportSize
+            local w = InfoFrame.AbsoluteSize.X
+            local h = InfoFrame.AbsoluteSize.Y
+            newX = math.clamp(newX, 0, math.max(0, vp.X - w))
+            newY = math.clamp(newY, 0, math.max(0, vp.Y - h))
+
+            InfoFrame.Position = UDim2.new(infoStartPos.X.Scale, newX, infoStartPos.Y.Scale, newY)
+        end
+    end)
+
+    infoDragConn3 = UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            draggingInfo = false
+        end
+    end)
+
+    infoConn = RunService.RenderStepped:Connect(function()
+        if isDestroyed then return end
+
+        fpsFrames = fpsFrames + 1
+        if tick() - fpsTime >= 1 then
+            currentFPS = fpsFrames
+            fpsFrames = 0
+            fpsTime = tick()
+        end
+
+        local text = BuildInfoText()
+        if text then
+            InfoFrame.Visible = true
+            InfoLabel.Text = text
+            InfoStroke.Color = Colors.Accent
+            InfoLabel.TextColor3 = Colors.Accent
+        else
+            InfoFrame.Visible = false
+        end
+    end)
+end
+
+local function StopWatermark()
+    if infoConn then infoConn:Disconnect(); infoConn = nil end
+    if infoDragConn1 then infoDragConn1:Disconnect(); infoDragConn1 = nil end
+    if infoDragConn2 then infoDragConn2:Disconnect(); infoDragConn2 = nil end
+    if infoDragConn3 then infoDragConn3:Disconnect(); infoDragConn3 = nil end
+    if InfoGui then InfoGui:Destroy(); InfoGui = nil end
+    InfoFrame = nil
+    InfoLabel = nil
+    InfoStroke = nil
+end
+
+-- === ANTI-AFK ===
+local antiAfkConn = nil
+local vu = nil
+pcall(function() vu = game:GetService("VirtualUser") end)
+
+local function StartAntiAFK()
+    if antiAfkConn then return end
+    antiAfkConn = LP.Idled:Connect(function()
+        if Settings.AntiAFKEnabled and vu then
+            pcall(function()
+                vu:CaptureController()
+                vu:ClickButton2(Vector2.new())
+            end)
+        end
+    end)
+end
+
+local function StopAntiAFK()
+    if antiAfkConn then antiAfkConn:Disconnect(); antiAfkConn = nil end
 end
 
 local fovLastSize = -1
@@ -1591,6 +1983,14 @@ local function ApplyAllSettings()
     if Settings.NoclipEnabled then StartNoclip() else StopNoclip() end
     RefreshESP()
     RefreshAllHeads()
+
+    if Settings.TriggerBotEnabled then StartTriggerBot() else StopTriggerBot() end
+    if Settings.HitSoundsEnabled then StartHitSounds() else StopHitSounds() end
+    if Settings.AntiFlingEnabled then StartAntiFling() else StopAntiFling() end
+    if Settings.AutoParryEnabled then StartAutoParry() else StopAutoParry() end
+    if Settings.AdaptiveSpeedEnabled then StartAdaptiveSpeed() else StopAdaptiveSpeed() end
+    if Settings.WatermarkFPS or Settings.WatermarkPing then StartWatermark() else StopWatermark() end
+    if Settings.AntiAFKEnabled then StartAntiAFK() else StopAntiAFK() end
 end
 
 local ReloadActiveTab
@@ -1642,6 +2042,39 @@ local function FillCombatTab()
     CreateToggle("Показывать FOV при локе", Settings.AimLockShowFOV,
         function(s) Settings.AimLockShowFOV = s; RequestSave() end)
 
+    CreateSection("Trigger Bot")
+    CreateToggleBind("Trigger Bot",
+        function() return Settings.TriggerBotEnabled end,
+        function(s)
+            Settings.TriggerBotEnabled = s
+            if s then StartTriggerBot() else StopTriggerBot() end
+            RequestSave()
+        end,
+        function() return Settings.TriggerBotKey end,
+        function(k) Settings.TriggerBotKey = k; RequestSave() end)
+    CreateSlider("Задержка (мс)", 10, 500, Settings.TriggerBotDelay, "ms",
+        function(v) Settings.TriggerBotDelay = v; RequestSave() end)
+    CreateSlider("FOV триггера", 1, 100, Settings.TriggerBotFOV, "px",
+        function(v) Settings.TriggerBotFOV = v; RequestSave() end)
+
+    CreateSection("Hit Sounds")
+    CreateToggle("Hit Sounds (звук попадания)", Settings.HitSoundsEnabled,
+        function(s)
+            Settings.HitSoundsEnabled = s
+            if s then StartHitSounds() else StopHitSounds() end
+            RequestSave()
+        end)
+    CreateSlider("Громкость", 1, 100, Settings.HitSoundsVolume, "%",
+        function(v) Settings.HitSoundsVolume = v; RequestSave() end)
+
+    CreateSection("Auto Parry")
+    CreateToggle("Auto Parry (авто-блок)", Settings.AutoParryEnabled,
+        function(s)
+            Settings.AutoParryEnabled = s
+            if s then StartAutoParry() else StopAutoParry() end
+            RequestSave()
+        end)
+
     CreateSection("Дополнительно")
     CreateToggle("Проверка видимости", Settings.AimbotVisibilityCheck,
         function(s) Settings.AimbotVisibilityCheck = s; RequestSave() end)
@@ -1679,6 +2112,20 @@ local function FillVisualTab()
     CreateSection("Освещение")
     CreateToggle("Fullbright", Settings.FullbrightEnabled,
         function(s) Settings.FullbrightEnabled = s; ApplyFullbright(); RequestSave() end)
+
+    CreateSection("Info Window (FPS / Ping)")
+    CreateToggle("Показывать FPS", Settings.WatermarkFPS,
+        function(s)
+            Settings.WatermarkFPS = s
+            if s or Settings.WatermarkPing then StartWatermark() else StopWatermark() end
+            RequestSave()
+        end)
+    CreateToggle("Показывать Ping", Settings.WatermarkPing,
+        function(s)
+            Settings.WatermarkPing = s
+            if s or Settings.WatermarkFPS then StartWatermark() else StopWatermark() end
+            RequestSave()
+        end)
 end
 
 local function FillPersonTab()
@@ -1694,6 +2141,7 @@ local function FillPersonTab()
         function(v) Settings.JumpValue = v; ApplyJump(); RequestSave() end)
     CreateToggle("Infinite Jump", Settings.InfJumpEnabled,
         function(s) Settings.InfJumpEnabled = s; RequestSave() end)
+
     CreateSection("Полёт и проход")
     CreateToggleBind("Fly",
         function() return Settings.FlyEnabled end,
@@ -1707,6 +2155,32 @@ local function FillPersonTab()
         function(v) Settings.NoclipEnabled = v; if v then StartNoclip() else StopNoclip() end; RequestSave() end,
         function() return Settings.NoclipKey end,
         function(k) Settings.NoclipKey = k; RequestSave() end)
+
+    CreateSection("Защита")
+    CreateToggle("Anti-Fling", Settings.AntiFlingEnabled,
+        function(s)
+            Settings.AntiFlingEnabled = s
+            if s then StartAntiFling() else StopAntiFling() end
+            RequestSave()
+        end)
+    CreateToggle("Anti-AFK", Settings.AntiAFKEnabled,
+        function(s)
+            Settings.AntiAFKEnabled = s
+            if s then StartAntiAFK() else StopAntiAFK() end
+            RequestSave()
+        end)
+
+    CreateSection("Дополнительно")
+    CreateToggle("Fly Collide (не входить в стены)", Settings.FlyCollideEnabled,
+        function(s) Settings.FlyCollideEnabled = s; RequestSave() end)
+    CreateToggle("Adaptive Speed", Settings.AdaptiveSpeedEnabled,
+        function(s)
+            Settings.AdaptiveSpeedEnabled = s
+            if s then StartAdaptiveSpeed() else StopAdaptiveSpeed() end
+            RequestSave()
+        end)
+    CreateSlider("Радиус замера скорости", 5, 100, Settings.AdaptiveSpeedRadius, " studs",
+        function(v) Settings.AdaptiveSpeedRadius = v; RequestSave() end)
 end
 
 local configNameBuffer = ""
@@ -1722,6 +2196,10 @@ local function FillSettingsTab()
     end)
     CreateDropdown("Акцентный цвет", {"Amber", "Red", "Blue", "Green", "Purple"}, Settings.AccentColor, function(o)
         Settings.AccentColor = o; UpdateAccentColor(o); RequestSave()
+    end)
+    CreateButton("Сбросить позицию меню", Colors.Text, function()
+        MainFrame.Position = UDim2.new(0.5, -300, 0.5, -200)
+        Notify("Позиция меню сброшена")
     end)
 
     CreateSection("Конфиги")
@@ -1792,11 +2270,68 @@ local function FillSettingsTab()
         end
     end)
 
+    CreateSection("Безопасность")
+    CreateButton("PANIC (выключить всё)", Color3.fromRGB(255, 100, 100), function()
+        Settings.AimbotEnabled, Settings.AimLockEnabled, Settings.TriggerBotEnabled = false, false, false
+        Settings.ESPEnabled, Settings.NameESPEnabled = false, false
+        Settings.HealthESPEnabled, Settings.DistanceESPEnabled = false, false
+        Settings.FullbrightEnabled, Settings.SpeedEnabled = false, false
+        Settings.JumpEnabled, Settings.InfJumpEnabled = false, false
+        Settings.FlyEnabled, Settings.NoclipEnabled = false, false
+        Settings.HeadHitboxEnabled, Settings.AntiFlingEnabled = false, false
+        Settings.AutoParryEnabled, Settings.HitSoundsEnabled = false, false
+        Settings.AdaptiveSpeedEnabled, Settings.AntiAFKEnabled = false, false
+        AimLock.Active = false
+        AimLock.Target = nil
+        AimLock.LockedPlayer = nil
+        AimLock.ToggleState = false
+        StopFly()
+        StopNoclip()
+        StopTriggerBot()
+        StopHitSounds()
+        StopAntiFling()
+        StopAutoParry()
+        StopAdaptiveSpeed()
+        StopAntiAFK()
+        ApplyFullbright()
+        ApplySpeed()
+        ApplyJump()
+        ClearESPTable()
+        RefreshAllHeads()
+        RequestSave()
+        Notify("PANIC: все функции выключены", Color3.fromRGB(255, 100, 100))
+        task.spawn(function()
+            task.wait()
+            ReloadActiveTab()
+        end)
+    end)
+
+    CreateSection("Автозагрузка")
+    CreateTextInput("Имя конфига для автозагрузки", Settings.AutoLoadConfig, "my_config",
+        function(t) Settings.AutoLoadConfig = t; RequestSave() end)
+    CreateButton("Загрузить сейчас", Colors.Text, function()
+        if Settings.AutoLoadConfig == "" then
+            Notify("Введи имя конфига", Color3.fromRGB(220, 160, 80))
+            return
+        end
+        local ok, err = LoadConfig(Settings.AutoLoadConfig)
+        if ok then
+            task.spawn(function()
+                task.wait()
+                ApplyAllSettings()
+                ReloadActiveTab()
+                Notify("Автозагружено: " .. Settings.AutoLoadConfig)
+            end)
+        else
+            Notify("Ошибка: " .. tostring(err), Color3.fromRGB(220, 80, 80))
+        end
+    end)
+
     CreateSection("Информация")
     local Info = Instance.new("TextLabel")
-    Info.Size = UDim2.new(1, 0, 0, 80)
+    Info.Size = UDim2.new(1, 0, 0, 100)
     Info.BackgroundColor3 = Colors.ElementBg
-    Info.Text = "  NEXUS\n  Insert — меню\n  Delete — уничтожить\n  BIND: Aimbot, AimLock, Fly, Noclip"
+    Info.Text = "  NEXUS\n  Insert — меню\n  Delete — уничтожить\n  BIND: Aimbot, AimLock, Trigger, Fly, Noclip\n  PANIC — выключить всё"
     Info.TextColor3 = Colors.Text
     Info.TextSize = 12
     Info.Font = Enum.Font.GothamMedium
@@ -1952,20 +2487,39 @@ task.spawn(function()
     end
 end)
 
+-- === Перетаскивание меню (с ограничениями, чтобы не улетало за экран) ===
 local dragging, dragStart, startPos = false, nil, nil
 TopBar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
         dragging, dragStart, startPos = true, input.Position, MainFrame.Position
     end
 end)
 Track(UIS.InputChanged:Connect(function(input)
-    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch) then
         local d = input.Position - dragStart
-        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        local newX = startPos.X.Offset + d.X
+        local newY = startPos.Y.Offset + d.Y
+
+        local vp = Camera.ViewportSize
+        local mfSize = MainFrame.AbsoluteSize
+        local minX = -mfSize.X + 100
+        local maxX = vp.X - 100
+        local minY = 0
+        local maxY = vp.Y - 45
+
+        newX = math.clamp(newX, minX, maxX)
+        newY = math.clamp(newY, minY, maxY)
+
+        MainFrame.Position = UDim2.new(startPos.X.Scale, newX, startPos.Y.Scale, newY)
     end
 end))
 Track(UIS.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
 end))
 
 local function DestroyEverything()
@@ -1977,6 +2531,12 @@ local function DestroyEverything()
     Settings.FlyEnabled, Settings.NoclipEnabled = false, false
     Settings.HeadHitboxEnabled = false
     Settings.AimLockEnabled = false
+    Settings.TriggerBotEnabled = false
+    Settings.HitSoundsEnabled = false
+    Settings.AntiFlingEnabled = false
+    Settings.AutoParryEnabled = false
+    Settings.AdaptiveSpeedEnabled = false
+    Settings.AntiAFKEnabled = false
     AimLock.Active = false
     AimLock.Target = nil
     AimLock.LockedPlayer = nil
@@ -1989,6 +2549,13 @@ local function DestroyEverything()
     DisconnectAll()
     StopFly()
     StopNoclip()
+    StopTriggerBot()
+    StopHitSounds()
+    StopAntiFling()
+    StopAutoParry()
+    StopAdaptiveSpeed()
+    StopWatermark()
+    StopAntiAFK()
     ClearESPTable()
     ApplyFullbright()
     local h = GetHum()
@@ -2073,4 +2640,28 @@ if Settings.FlyEnabled then StartFly() end
 if Settings.NoclipEnabled then StartNoclip() end
 if Settings.HeadHitboxEnabled and Settings.HeadHitboxScale > 1 then RefreshAllHeads() end
 
+-- Принудительно ставим меню в центр при старте
+MainFrame.Position = UDim2.new(0.5, -300, 0.5, -200)
+
 ShowMain()
+
+if Settings.AutoLoadConfig and Settings.AutoLoadConfig ~= "" then
+    task.spawn(function()
+        task.wait(0.5)
+        local ok = LoadConfig(Settings.AutoLoadConfig)
+        if ok then
+            ApplyAllSettings()
+            task.wait(0.2)
+            ReloadActiveTab()
+            Notify("Автозагружен конфиг: " .. Settings.AutoLoadConfig)
+        end
+    end)
+end
+
+if Settings.TriggerBotEnabled then StartTriggerBot() end
+if Settings.HitSoundsEnabled then StartHitSounds() end
+if Settings.AntiFlingEnabled then StartAntiFling() end
+if Settings.AutoParryEnabled then StartAutoParry() end
+if Settings.AdaptiveSpeedEnabled then StartAdaptiveSpeed() end
+if Settings.WatermarkFPS or Settings.WatermarkPing then StartWatermark() end
+if Settings.AntiAFKEnabled then StartAntiAFK() end
