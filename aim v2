@@ -52,6 +52,12 @@ local Defaults = {
     WatermarkPing = false,
     AntiAFKEnabled = false,
     AutoLoadConfig = "",
+    PredictionEnabled = false,
+    PredictionAmount = 15,
+    MenuPosX = 0,
+    MenuPosY = 0,
+    InfoPosX = 12,
+    InfoPosY = 12,
 }
 
 local Settings = {}
@@ -276,7 +282,7 @@ FOVStroke.Transparency = 0
 
 local MainFrame = Instance.new("Frame")
 MainFrame.Size = UDim2.new(0, 600, 0, 400)
-MainFrame.Position = UDim2.new(0.5, -300, 0.5, -200)
+MainFrame.Position = UDim2.new(0.5, Settings.MenuPosX, 0.5, Settings.MenuPosY)
 MainFrame.BackgroundColor3 = Colors.Background
 MainFrame.BackgroundTransparency = Settings.BackgroundTransparency / 100
 MainFrame.BorderSizePixel = 0
@@ -373,10 +379,10 @@ local function ShowMain()
     menuVisible = true
     MainFrame.Visible = true
     MainFrame.Size = UDim2.new(0, 0, 0, 0)
-    local savedPos = MainFrame.Position
     MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
     TweenService:Create(MainFrame, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-        Size = UDim2.new(0, 600, 0, 400), Position = UDim2.new(savedPos.X.Scale, savedPos.X.Offset, savedPos.Y.Scale, savedPos.Y.Offset)
+        Size = UDim2.new(0, 600, 0, 400),
+        Position = UDim2.new(0.5, Settings.MenuPosX or 0, 0.5, Settings.MenuPosY or 0)
     }):Play()
 end
 
@@ -1045,6 +1051,18 @@ local function IsVisible(targetPart, targetChar)
     return false
 end
 
+-- === PREDICTION ===
+local function ApplyPrediction(targetPos, targetPart)
+    if not Settings.PredictionEnabled then return targetPos end
+    if not targetPart or not targetPart.Parent then return targetPos end
+    local hrp = targetPart.Parent:FindFirstChild("HumanoidRootPart")
+    if not hrp then return targetPos end
+    local vel = hrp.AssemblyLinearVelocity
+    if not vel then return targetPos end
+    local t = Settings.PredictionAmount / 100
+    return targetPos + vel * t
+end
+
 local function GetTarget()
     local best, bestVal = nil, math.huge
     local mLoc = UIS:GetMouseLocation()
@@ -1076,7 +1094,8 @@ local function AimAt(target)
     if not target then return end
     local cam = Camera
     local camPos = cam.CFrame.Position
-    local targetCF = CFrame.new(camPos, target.Position)
+    local aimPos = ApplyPrediction(target.Position, target)
+    local targetCF = CFrame.new(camPos, aimPos)
     local newCF = cam.CFrame:Lerp(targetCF, Settings.AimbotSmoothness / 100)
 
     pcall(function() cam.CFrame = newCF end)
@@ -1708,7 +1727,7 @@ local function StartWatermark()
 
     InfoFrame = Instance.new("Frame")
     InfoFrame.Size = UDim2.new(0, 0, 0, 24)
-    InfoFrame.Position = UDim2.new(0, 12, 0, 12)
+    InfoFrame.Position = UDim2.new(0, Settings.InfoPosX or 12, 0, Settings.InfoPosY or 12)
     InfoFrame.BackgroundColor3 = Color3.fromRGB(20, 16, 12)
     InfoFrame.BackgroundTransparency = 0.35
     InfoFrame.BorderSizePixel = 0
@@ -1776,7 +1795,12 @@ local function StartWatermark()
     infoDragConn3 = UIS.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
             or input.UserInputType == Enum.UserInputType.Touch then
-            draggingInfo = false
+            if draggingInfo then
+                draggingInfo = false
+                Settings.InfoPosX = InfoFrame.Position.X.Offset
+                Settings.InfoPosY = InfoFrame.Position.Y.Offset
+                RequestSave()
+            end
         end
     end)
 
@@ -1910,7 +1934,8 @@ local aimlockConn = RunService.RenderStepped:Connect(function()
 
         local cam = Camera
         local camPos = cam.CFrame.Position
-        local targetCF = CFrame.new(camPos, target.Position)
+        local aimPos = ApplyPrediction(target.Position, target)
+        local targetCF = CFrame.new(camPos, aimPos)
         local alpha = math.clamp(Settings.AimLockSmoothness / 100, 0.01, 1)
         local newCF = cam.CFrame:Lerp(targetCF, alpha)
 
@@ -2041,6 +2066,12 @@ local function FillCombatTab()
         function(v) Settings.AimLockSmoothness = v; RequestSave() end)
     CreateToggle("Показывать FOV при локе", Settings.AimLockShowFOV,
         function(s) Settings.AimLockShowFOV = s; RequestSave() end)
+
+    CreateSection("Prediction (упреждение)")
+    CreateToggle("Prediction", Settings.PredictionEnabled,
+        function(s) Settings.PredictionEnabled = s; RequestSave() end)
+    CreateSlider("Сила упреждения", 1, 100, Settings.PredictionAmount, "%",
+        function(v) Settings.PredictionAmount = v; RequestSave() end)
 
     CreateSection("Trigger Bot")
     CreateToggleBind("Trigger Bot",
@@ -2198,8 +2229,20 @@ local function FillSettingsTab()
         Settings.AccentColor = o; UpdateAccentColor(o); RequestSave()
     end)
     CreateButton("Сбросить позицию меню", Colors.Text, function()
-        MainFrame.Position = UDim2.new(0.5, -300, 0.5, -200)
+        Settings.MenuPosX = 0
+        Settings.MenuPosY = 0
+        MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+        RequestSave()
         Notify("Позиция меню сброшена")
+    end)
+    CreateButton("Сбросить позицию Info Window", Colors.Text, function()
+        Settings.InfoPosX = 12
+        Settings.InfoPosY = 12
+        if InfoFrame then
+            InfoFrame.Position = UDim2.new(0, 12, 0, 12)
+        end
+        RequestSave()
+        Notify("Позиция Info Window сброшена")
     end)
 
     CreateSection("Конфиги")
@@ -2281,6 +2324,7 @@ local function FillSettingsTab()
         Settings.HeadHitboxEnabled, Settings.AntiFlingEnabled = false, false
         Settings.AutoParryEnabled, Settings.HitSoundsEnabled = false, false
         Settings.AdaptiveSpeedEnabled, Settings.AntiAFKEnabled = false, false
+        Settings.PredictionEnabled = false
         AimLock.Active = false
         AimLock.Target = nil
         AimLock.LockedPlayer = nil
@@ -2487,7 +2531,7 @@ task.spawn(function()
     end
 end)
 
--- === Перетаскивание меню (с ограничениями, чтобы не улетало за экран) ===
+-- === Перетаскивание меню (правильные границы) ===
 local dragging, dragStart, startPos = false, nil, nil
 TopBar.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1
@@ -2504,10 +2548,13 @@ Track(UIS.InputChanged:Connect(function(input)
 
         local vp = Camera.ViewportSize
         local mfSize = MainFrame.AbsoluteSize
-        local minX = -mfSize.X + 100
-        local maxX = vp.X - 100
-        local minY = 0
-        local maxY = vp.Y - 45
+
+        -- Scale = 0.5, значит реальная позиция = vp * 0.5 + offset
+        -- Считаем допустимый offset для каждого края
+        local minX = 100 - vp.X / 2 - mfSize.X
+        local maxX = vp.X / 2 - 100
+        local minY = -vp.Y / 2
+        local maxY = vp.Y / 2 - 45
 
         newX = math.clamp(newX, minX, maxX)
         newY = math.clamp(newY, minY, maxY)
@@ -2518,7 +2565,12 @@ end))
 Track(UIS.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
+        if dragging then
+            dragging = false
+            Settings.MenuPosX = MainFrame.Position.X.Offset
+            Settings.MenuPosY = MainFrame.Position.Y.Offset
+            RequestSave()
+        end
     end
 end))
 
@@ -2537,6 +2589,7 @@ local function DestroyEverything()
     Settings.AutoParryEnabled = false
     Settings.AdaptiveSpeedEnabled = false
     Settings.AntiAFKEnabled = false
+    Settings.PredictionEnabled = false
     AimLock.Active = false
     AimLock.Target = nil
     AimLock.LockedPlayer = nil
@@ -2639,9 +2692,6 @@ ApplyJump()
 if Settings.FlyEnabled then StartFly() end
 if Settings.NoclipEnabled then StartNoclip() end
 if Settings.HeadHitboxEnabled and Settings.HeadHitboxScale > 1 then RefreshAllHeads() end
-
--- Принудительно ставим меню в центр при старте
-MainFrame.Position = UDim2.new(0.5, -300, 0.5, -200)
 
 ShowMain()
 
