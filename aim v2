@@ -30,6 +30,11 @@ local Defaults = {
     InfJumpEnabled = false, FlyEnabled = false, FlyKey = "None", FlySpeed = 50,
     NoclipEnabled = false, NoclipKey = "None",
     HeadHitboxEnabled = false, HeadHitboxScale = 1,
+    AimLockEnabled = false,
+    AimLockKey = "E",
+    AimLockSmoothness = 25,
+    AimLockShowFOV = true,
+    AimLockMode = "Hold",
 }
 
 local Settings = {}
@@ -152,6 +157,7 @@ Colors.Accent = AccentColors[Settings.AccentColor] or AccentColors.Amber
 Colors.AccentSoft = AccentSoftColors[Settings.AccentColor] or AccentSoftColors.Amber
 
 local Menu = { AllItems = {}, WaitingForBind = nil, Gui = nil, MainFrame = nil }
+local AimLock = { Active = false, Target = nil, ToggleState = false, LockedPlayer = nil }
 local AllElements, TabButtons, ActiveTab = {}, {}, nil
 local function Reg(el) table.insert(AllElements, el) end
 
@@ -174,7 +180,6 @@ FOVGui.IgnoreGuiInset = true
 FOVGui.DisplayOrder = -1
 FOVGui.Parent = CoreGui
 
--- === TOASTS ===
 local ToastContainer = Instance.new("Frame")
 ToastContainer.Name = "Toasts"
 ToastContainer.AnchorPoint = Vector2.new(0, 1)
@@ -209,15 +214,6 @@ Notify = function(text, color)
     bar.BorderSizePixel = 0
     bar.Parent = T
     Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
-
-    local glow = Instance.new("Frame")
-    glow.Size = UDim2.new(0, 3, 1, -14)
-    glow.Position = UDim2.new(0, 8, 0, 7)
-    glow.BackgroundColor3 = color or Colors.Accent
-    glow.BorderSizePixel = 0
-    glow.BackgroundTransparency = 0.6
-    glow.ZIndex = 0
-    glow.Parent = T
 
     local label = Instance.new("TextLabel")
     label.Size = UDim2.new(1, -26, 1, 0)
@@ -468,15 +464,6 @@ local function CreateSection(text)
     dot.Parent = c
     Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
 
-    local glow = Instance.new("Frame")
-    glow.Size = UDim2.new(0, 4, 0, 14)
-    glow.Position = UDim2.new(0, 0, 0.5, -7)
-    glow.BackgroundColor3 = Colors.Accent
-    glow.BorderSizePixel = 0
-    glow.BackgroundTransparency = 0.6
-    glow.ZIndex = 0
-    glow.Parent = c
-
     local s = Instance.new("TextLabel")
     s.Size = UDim2.new(1, -130, 1, 0)
     s.Position = UDim2.new(0, 12, 0, 0)
@@ -502,7 +489,6 @@ local function CreateSection(text)
 
     Reg({obj = s, type = "text"})
     Reg({obj = dot, type = "fill"})
-    Reg({obj = glow, type = "fillsoft", stroke = nil, gradient = lg})
     return c
 end
 
@@ -739,14 +725,6 @@ local function CreateSlider(text, min, max, default, suffix, callback)
     Fill.Parent = BG
     Instance.new("UICorner", Fill).CornerRadius = UDim.new(1, 0)
 
-    local FillGlow = Instance.new("Frame")
-    FillGlow.Size = UDim2.new(1, 0, 1, 0)
-    FillGlow.BackgroundColor3 = Colors.AccentSoft
-    FillGlow.BackgroundTransparency = 0.7
-    FillGlow.BorderSizePixel = 0
-    FillGlow.Parent = Fill
-    Instance.new("UICorner", FillGlow).CornerRadius = UDim.new(1, 0)
-
     local C = Instance.new("Frame")
     C.Size = UDim2.new(0, 16, 0, 16)
     C.Position = UDim2.new((default - min) / (max - min), -8, 0.5, -8)
@@ -837,23 +815,6 @@ local function CreateDropdown(text, options, default, callback)
     SelStroke.Thickness = 1
     SelStroke.Transparency = 0.85
 
-    local Arrow = Instance.new("TextLabel")
-    Arrow.Size = UDim2.new(0, 15, 0, 15)
-    Arrow.Position = UDim2.new(1, -20, 0.5, -7.5)
-    Arrow.BackgroundTransparency = 1
-    Arrow.Text = "▼"
-    Arrow.TextColor3 = Colors.SubText
-    Arrow.TextSize = 10
-    Arrow.Font = Enum.Font.GothamBold
-    Arrow.Parent = Sel
-
-    Sel.MouseEnter:Connect(function()
-        TweenService:Create(SelStroke, TweenInfo.new(0.15), {Transparency = 0.4}):Play()
-    end)
-    Sel.MouseLeave:Connect(function()
-        TweenService:Create(SelStroke, TweenInfo.new(0.15), {Transparency = 0.85}):Play()
-    end)
-
     local OC = Instance.new("Frame")
     OC.Size = UDim2.new(1, 0, 0, 0)
     OC.Position = UDim2.new(0, 0, 0, 38)
@@ -880,7 +841,6 @@ local function CreateDropdown(text, options, default, callback)
         if not W.Parent then return end
         TweenService:Create(OC, TweenInfo.new(0.25), {Size = UDim2.new(1, 0, 0, 0)}):Play()
         TweenService:Create(W, TweenInfo.new(0.25), {Size = UDim2.new(1, 0, 0, 38)}):Play()
-        TweenService:Create(Arrow, TweenInfo.new(0.25), {Rotation = 0}):Play()
         task.wait(0.25)
         if OC and OC.Parent and not isOpen then OC.Visible = false end
     end
@@ -912,7 +872,6 @@ local function CreateDropdown(text, options, default, callback)
             local h = #options * 28 + 10
             TweenService:Create(OC, TweenInfo.new(0.25), {Size = UDim2.new(1, 0, 0, h)}):Play()
             TweenService:Create(W, TweenInfo.new(0.25), {Size = UDim2.new(1, 0, 0, 38 + h)}):Play()
-            TweenService:Create(Arrow, TweenInfo.new(0.25), {Rotation = 180}):Play()
         else
             CloseDropdown()
         end
@@ -987,7 +946,9 @@ local function UpdateAccentColor(newName)
         ColorSequenceKeypoint.new(1, nc),
     })
     ContentScroll.ScrollBarImageColor3 = nc
-    FOVStroke.Color = nc
+    if not AimLock.Active then
+        FOVStroke.Color = nc
+    end
     for name, data in pairs(TabButtons) do
         if name == ActiveTab then data.Label.TextColor3 = nc end
         if data.Indicator then data.Indicator.BackgroundColor3 = nc end
@@ -1037,7 +998,6 @@ local function IsIgnored(plr)
     return false
 end
 
--- ИСПРАВЛЕНО: Проверка видимости через несколько точек
 local function IsVisible(targetPart, targetChar)
     if not Settings.AimbotVisibilityCheck then return true end
     local myChar = LP.Character
@@ -1050,7 +1010,6 @@ local function IsVisible(targetPart, targetChar)
     rp.FilterDescendantsInstances = {myChar}
     rp.IgnoreWater = true
 
-    -- Проверяем разные точки цели
     local checkPoints = {targetPart.Position}
     local head = targetChar:FindFirstChild("Head")
     local torso = targetChar:FindFirstChild("UpperTorso") or targetChar:FindFirstChild("Torso")
@@ -1093,7 +1052,6 @@ local function GetTarget()
     return best
 end
 
--- ИСПРАВЛЕНО: Aimbot через CFrame + mousemoverel (работает везде)
 local function AimAt(target)
     if not target then return end
     local cam = Camera
@@ -1101,10 +1059,8 @@ local function AimAt(target)
     local targetCF = CFrame.new(camPos, target.Position)
     local newCF = cam.CFrame:Lerp(targetCF, Settings.AimbotSmoothness / 100)
 
-    -- Способ 1: CFrame
     pcall(function() cam.CFrame = newCF end)
 
-    -- Способ 2: mousemoverel (для игр где CFrame не работает)
     pcall(function()
         if mousemoverel then
             local currentLook = cam.CFrame.LookVector
@@ -1116,7 +1072,6 @@ local function AimAt(target)
     end)
 end
 
--- ИСПРАВЛЕНО: ESP с чистой таблицей соединений
 local ESP = {
     Highlights = {}, NameLabels = {}, HealthLabels = {}, DistanceLabels = {},
     Connections = {}, PlayerConnections = {},
@@ -1157,7 +1112,6 @@ local function AddESP(plr)
         hl.Parent = char
         ESP.Highlights[plr] = hl
 
-        -- Следим чтобы Highlight не пропадал
         local conn = char.DescendantRemoving:Connect(function(desc)
             if desc == hl then
                 task.wait(0.1)
@@ -1205,7 +1159,6 @@ local function AddESP(plr)
         tl.Parent = bb
         ESP.HealthLabels[plr] = {Billboard = bb, TextLabel = tl}
 
-        -- ИСПРАВЛЕНО: соединение записывается по игроку
         local conn = hum.HealthChanged:Connect(function(h)
             local d = ESP.HealthLabels[plr]
             if d and d.TextLabel and d.TextLabel.Parent then
@@ -1234,7 +1187,6 @@ local function AddESP(plr)
     end
 end
 
--- ИСПРАВЛЕНО: чистим соединения конкретного игрока
 local function RemoveESP(plr)
     if ESP.PlayerConnections[plr] then
         for _, c in ipairs(ESP.PlayerConnections[plr]) do
@@ -1432,7 +1384,6 @@ end))
 
 local flyConn, flyLV, flyAttachment, noclipConn
 
--- ИСПРАВЛЕНО: LinearVelocity вместо BodyVelocity (не детектится)
 local function StartFly()
     if flyConn then return end
     local char = LP.Character
@@ -1463,6 +1414,7 @@ local function StartFly()
         flyLV.VectorVelocity = m * Settings.FlySpeed
     end)
 end
+
 local function StopFly()
     if flyConn then flyConn:Disconnect(); flyConn = nil end
     if flyLV then flyLV:Destroy(); flyLV = nil end
@@ -1485,6 +1437,7 @@ local function StartNoclip()
         if c then ApplyNoclipTo(c) end
     end)
 end
+
 local function StopNoclip()
     if noclipConn then noclipConn:Disconnect(); noclipConn = nil end
 end
@@ -1493,8 +1446,100 @@ local fovLastSize = -1
 local fovLastVisible = false
 local fovLastX, fovLastY = -1, -1
 
+local aimlockConn = RunService.RenderStepped:Connect(function()
+    if not Settings.AimLockEnabled or isDestroyed then
+        AimLock.Active = false
+        AimLock.Target = nil
+        AimLock.LockedPlayer = nil
+        return
+    end
+
+    local keyHeld = false
+    local keyEnum = GetKeyEnum(Settings.AimLockKey)
+    if keyEnum then
+        if typeof(keyEnum) == "EnumItem" and keyEnum.EnumType == Enum.KeyCode then
+            keyHeld = UIS:IsKeyDown(keyEnum)
+        elseif typeof(keyEnum) == "EnumItem" and keyEnum.EnumType == Enum.UserInputType then
+            keyHeld = UIS:IsMouseButtonPressed(keyEnum)
+        end
+    end
+
+    local shouldAim = false
+    if Settings.AimLockMode == "Toggle" then
+        shouldAim = AimLock.ToggleState
+    else
+        shouldAim = keyHeld
+    end
+
+    if not shouldAim then
+        AimLock.Active = false
+        AimLock.Target = nil
+        AimLock.LockedPlayer = nil
+        return
+    end
+
+    local locked = AimLock.LockedPlayer
+    local lockedValid = false
+    local lockedPart = nil
+
+    if locked then
+        if locked.Parent and locked.Character then
+            local hum = locked.Character:FindFirstChildOfClass("Humanoid")
+            local part = locked.Character:FindFirstChild(Settings.AimbotHitbox)
+            if hum and hum.Health > 0 and part then
+                lockedValid = true
+                lockedPart = part
+            end
+        end
+    end
+
+    if not lockedValid then
+        local newTarget = GetTarget()
+        if newTarget and newTarget.Parent then
+            local newPlr = Players:GetPlayerFromCharacter(newTarget.Parent)
+            if newPlr then
+                AimLock.LockedPlayer = newPlr
+                AimLock.Target = newTarget
+            end
+        else
+            AimLock.Target = nil
+            AimLock.LockedPlayer = nil
+            AimLock.Active = false
+            return
+        end
+    else
+        AimLock.Target = lockedPart
+        AimLock.LockedPlayer = locked
+    end
+
+    local target = AimLock.Target
+    if target and target.Parent then
+        AimLock.Active = true
+
+        local cam = Camera
+        local camPos = cam.CFrame.Position
+        local targetCF = CFrame.new(camPos, target.Position)
+        local alpha = math.clamp(Settings.AimLockSmoothness / 100, 0.01, 1)
+        local newCF = cam.CFrame:Lerp(targetCF, alpha)
+
+        pcall(function() cam.CFrame = newCF end)
+
+        pcall(function()
+            if mousemoverel then
+                local currentLook = cam.CFrame.LookVector
+                local targetLook = targetCF.LookVector
+                local dx = (targetLook.X - currentLook.X) * 500 * alpha
+                local dy = (targetLook.Y - currentLook.Y) * 500 * alpha
+                mousemoverel(dx, dy)
+            end
+        end)
+    end
+end)
+
 local aimbotConn = RunService.RenderStepped:Connect(function()
-    local wantVisible = Settings.AimbotShowFOV and Settings.AimbotEnabled
+    local wantVisible = (Settings.AimbotShowFOV and Settings.AimbotEnabled)
+        or (Settings.AimLockShowFOV and Settings.AimLockEnabled and AimLock.Active)
+
     if wantVisible then
         if not fovLastVisible then FOVCircle.Visible = true; fovLastVisible = true end
         local size = Settings.AimbotFOV * 2
@@ -1507,10 +1552,17 @@ local aimbotConn = RunService.RenderStepped:Connect(function()
             FOVCircle.Position = UDim2.new(0, mLoc.X, 0, mLoc.Y)
             fovLastX, fovLastY = mLoc.X, mLoc.Y
         end
+
+        if AimLock.Active then
+            FOVStroke.Color = Color3.fromRGB(255, 80, 80)
+        else
+            FOVStroke.Color = Colors.Accent
+        end
     else
         if fovLastVisible then FOVCircle.Visible = false; fovLastVisible = false end
     end
-    if Settings.AimbotEnabled then
+
+    if Settings.AimbotEnabled and not AimLock.Active then
         local t = GetTarget()
         if t then AimAt(t) end
     end
@@ -1561,9 +1613,39 @@ local function FillCombatTab()
         function(v) Settings.AimbotFOV = v; RequestSave() end)
     CreateToggle("Показывать круг FOV", Settings.AimbotShowFOV,
         function(s) Settings.AimbotShowFOV = s; RequestSave() end)
+
+    CreateSection("Aim Lock (жёсткий лок)")
+    CreateToggleBind("Aim Lock",
+        function() return Settings.AimLockEnabled end,
+        function(s)
+            Settings.AimLockEnabled = s
+            if not s then
+                AimLock.Active = false
+                AimLock.Target = nil
+                AimLock.LockedPlayer = nil
+                AimLock.ToggleState = false
+            end
+            RequestSave()
+        end,
+        function() return Settings.AimLockKey end,
+        function(k) Settings.AimLockKey = k; RequestSave() end)
+    CreateDropdown("Режим лока", {"Hold", "Toggle"}, Settings.AimLockMode,
+        function(o)
+            Settings.AimLockMode = o
+            AimLock.ToggleState = false
+            AimLock.LockedPlayer = nil
+            AimLock.Target = nil
+            RequestSave()
+        end)
+    CreateSlider("Резкость лока", 1, 100, Settings.AimLockSmoothness, "%",
+        function(v) Settings.AimLockSmoothness = v; RequestSave() end)
+    CreateToggle("Показывать FOV при локе", Settings.AimLockShowFOV,
+        function(s) Settings.AimLockShowFOV = s; RequestSave() end)
+
     CreateSection("Дополнительно")
     CreateToggle("Проверка видимости", Settings.AimbotVisibilityCheck,
         function(s) Settings.AimbotVisibilityCheck = s; RequestSave() end)
+
     CreateSection("Hitbox головы")
     CreateToggle("Увеличивать хитбокс головы", Settings.HeadHitboxEnabled, function(s)
         Settings.HeadHitboxEnabled = s
@@ -1575,6 +1657,7 @@ local function FillCombatTab()
         if Settings.HeadHitboxEnabled then RefreshAllHeads() end
         RequestSave()
     end)
+
     CreateSection("Игнор-лист")
     CreateTextInput("Игнорировать игроков", Settings.AimbotIgnoreList, "ник1, ник2, ник3",
         function(t) Settings.AimbotIgnoreList = t; RequestSave() end)
@@ -1713,7 +1796,7 @@ local function FillSettingsTab()
     local Info = Instance.new("TextLabel")
     Info.Size = UDim2.new(1, 0, 0, 80)
     Info.BackgroundColor3 = Colors.ElementBg
-    Info.Text = "  NEXUS\n  Insert — меню\n  Delete — уничтожить\n  BIND: Aimbot, Fly, Noclip"
+    Info.Text = "  NEXUS\n  Insert — меню\n  Delete — уничтожить\n  BIND: Aimbot, AimLock, Fly, Noclip"
     Info.TextColor3 = Colors.Text
     Info.TextSize = 12
     Info.Font = Enum.Font.GothamMedium
@@ -1769,16 +1852,6 @@ local function CreateTab(name, fillFn)
     Ind.Parent = B
     Instance.new("UICorner", Ind).CornerRadius = UDim.new(1, 0)
 
-    local IndGlow = Instance.new("Frame")
-    IndGlow.Size = UDim2.new(0, 3, 1, -16)
-    IndGlow.Position = UDim2.new(0, 3, 0.5, -0.5)
-    IndGlow.AnchorPoint = Vector2.new(0, 0.5)
-    IndGlow.BackgroundColor3 = Colors.Accent
-    IndGlow.BackgroundTransparency = 1
-    IndGlow.BorderSizePixel = 0
-    IndGlow.ZIndex = 0
-    IndGlow.Parent = B
-
     local L = Instance.new("TextLabel")
     L.Size = UDim2.new(1, -24, 1, 0)
     L.Position = UDim2.new(0, 16, 0, 0)
@@ -1812,15 +1885,11 @@ local function CreateTab(name, fillFn)
             if d.Indicator then
                 TweenService:Create(d.Indicator, TweenInfo.new(0.2), {BackgroundTransparency = 1}):Play()
             end
-            if d.IndicatorGlow then
-                TweenService:Create(d.IndicatorGlow, TweenInfo.new(0.2), {BackgroundTransparency = 1}):Play()
-            end
         end
         ActiveTab = name
         TweenService:Create(B, TweenInfo.new(0.2), {BackgroundTransparency = 0.3}):Play()
         TweenService:Create(L, TweenInfo.new(0.2), {TextColor3 = Colors.Accent}):Play()
         TweenService:Create(Ind, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {BackgroundTransparency = 0}):Play()
-        TweenService:Create(IndGlow, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {BackgroundTransparency = 0.6}):Play()
         if Menu.WaitingForBind and Menu.WaitingForBind.BindBtn and Menu.WaitingForBind.BindBtn.Parent then
             Menu.WaitingForBind.BindBtn.Text = Menu.WaitingForBind.CurrentKey
         end
@@ -1836,7 +1905,7 @@ local function CreateTab(name, fillFn)
         ContentFadeIn()
     end)
 
-    TabButtons[name] = {Button = B, Label = L, Fill = fillFn, Indicator = Ind, IndicatorGlow = IndGlow}
+    TabButtons[name] = {Button = B, Label = L, Fill = fillFn, Indicator = Ind}
 end
 
 CreateTab("Комбат", FillCombatTab)
@@ -1849,7 +1918,6 @@ local dt = TabButtons["Комбат"]
 TweenService:Create(dt.Button, TweenInfo.new(0.2), {BackgroundTransparency = 0.3}):Play()
 TweenService:Create(dt.Label, TweenInfo.new(0.2), {TextColor3 = Colors.Accent}):Play()
 TweenService:Create(dt.Indicator, TweenInfo.new(0.25), {BackgroundTransparency = 0}):Play()
-TweenService:Create(dt.IndicatorGlow, TweenInfo.new(0.25), {BackgroundTransparency = 0.6}):Play()
 FillCombatTab()
 UpdateAccentColor(Settings.AccentColor)
 
@@ -1908,10 +1976,16 @@ local function DestroyEverything()
     Settings.SpeedEnabled, Settings.JumpEnabled, Settings.InfJumpEnabled = false, false, false
     Settings.FlyEnabled, Settings.NoclipEnabled = false, false
     Settings.HeadHitboxEnabled = false
+    Settings.AimLockEnabled = false
+    AimLock.Active = false
+    AimLock.Target = nil
+    AimLock.LockedPlayer = nil
+    AimLock.ToggleState = false
     Menu.WaitingForBind = nil
     Hooked = {}
     for plr, _ in pairs(HeadOrig) do ResetHead(plr) end
     if aimbotConn then aimbotConn:Disconnect(); aimbotConn = nil end
+    if aimlockConn then aimlockConn:Disconnect(); aimlockConn = nil end
     DisconnectAll()
     StopFly()
     StopNoclip()
@@ -1948,6 +2022,30 @@ Track(UIS.InputBegan:Connect(function(input, gp)
         if k then local b = Menu.WaitingForBind; Menu.WaitingForBind = nil; b.Callback(k) end
         return
     end
+
+    if Settings.AimLockEnabled and Settings.AimLockMode == "Toggle" then
+        local cur = Settings.AimLockKey
+        if cur and cur ~= "None" then
+            local k = GetKeyEnum(cur)
+            if k then
+                local matched = false
+                if input.KeyCode == k then matched = true end
+                if input.UserInputType == k then matched = true end
+                if matched then
+                    AimLock.ToggleState = not AimLock.ToggleState
+                    if not AimLock.ToggleState then
+                        AimLock.Active = false
+                        AimLock.Target = nil
+                        AimLock.LockedPlayer = nil
+                    end
+                    Notify(AimLock.ToggleState and "Aim Lock: ON" or "Aim Lock: OFF",
+                        AimLock.ToggleState and Color3.fromRGB(80, 220, 120) or Color3.fromRGB(220, 160, 80))
+                    return
+                end
+            end
+        end
+    end
+
     for _, item in ipairs(Menu.AllItems) do
         if item.GetBindKey and item.ToggleFunction then
             local cur = item.GetBindKey()
@@ -1964,7 +2062,6 @@ Track(UIS.InputBegan:Connect(function(input, gp)
     end
 end))
 
--- Автосохранение при выходе
 game:BindToClose(function()
     pcall(function() SaveSettings() end)
 end)
